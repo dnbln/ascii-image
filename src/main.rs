@@ -1,16 +1,61 @@
+use clap::Clap;
 use image::imageops::FilterType;
-use image::{DynamicImage, GenericImageView, Pixel};
+use image::{DynamicImage, GenericImageView};
 use itertools::Itertools;
 use rayon::prelude::*;
+use regex::Regex;
 use std::convert::TryFrom;
 use std::error::Error;
+use std::num::ParseIntError;
 use std::path::PathBuf;
-use structopt::StructOpt;
+use std::str::FromStr;
+use thiserror::Error;
 
-#[derive(StructOpt)]
+enum ImageSize {
+    Default,
+
+    Sized { width: u32, height: u32 },
+}
+
+#[derive(Error, Debug)]
+enum ImageSizeParseError {
+    #[error("couldn't parse an int in the image size")]
+    ParseIntError(#[from] ParseIntError),
+    #[error("unknown size format `{0}`")]
+    UnknownSizeFormat(String),
+}
+
+impl FromStr for ImageSize {
+    type Err = ImageSizeParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == "_" {
+            return Ok(Self::Default);
+        }
+        let mut it = s.split("x");
+        if let Some(w_str) = it.next() {
+            if let Some(h_str) = it.next() {
+                return Ok(Self::Sized {
+                    width: u32::from_str(w_str)?,
+                    height: u32::from_str(h_str)?,
+                });
+            }
+        }
+
+        Err(ImageSizeParseError::UnknownSizeFormat(s.into()))
+    }
+}
+
+#[derive(Clap)]
 struct Opts {
-    #[structopt(required = true, parse(from_os_str))]
+    #[clap(required = true, parse(from_os_str))]
     input: PathBuf,
+
+    #[clap(short, long, default_value = "_", parse(try_from_str))]
+    size: ImageSize,
+
+    #[clap(short, long, default_value = "Threshold(100)", parse(try_from_str))]
+    rule: OnOffRule,
 }
 
 /// UTF8 of first (empty) braille character
@@ -41,6 +86,7 @@ where
         .sum::<u32>()
 }
 
+#[derive(Copy, Clone)]
 enum OnOffRule {
     PxThreshold(i32),
     Border(i32, i32),
@@ -93,19 +139,62 @@ impl OnOffRule {
     }
 }
 
+#[derive(Error, Debug)]
+enum OnOffRuleParseError {
+    #[error("number parse error")]
+    ParseIntError(#[from] ParseIntError),
+
+    #[error("unknown format for on off rule: `{0}`")]
+    UnknownFormat(String),
+}
+
+impl FromStr for OnOffRule {
+    type Err = OnOffRuleParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let re = Regex::new(r"^Threshold\((\d+)\)$").unwrap();
+
+        if re.is_match(s) {
+            let thr = re.captures(s).unwrap().iter().nth(1).unwrap().unwrap();
+
+            return Ok(OnOffRule::PxThreshold(i32::from_str(thr.as_str())?));
+        }
+
+        let re = Regex::new(r"^Border\((\d+),(\d+)\)$").unwrap();
+
+        if re.is_match(s) {
+            let captures = re.captures(s).unwrap();
+            let mut captures_iter = captures.iter();
+            let border_threshold = captures_iter.nth(1).unwrap().unwrap();
+            let border_size = captures_iter.next().unwrap().unwrap();
+
+            return Ok(OnOffRule::Border(
+                i32::from_str(border_threshold.as_str())?,
+                i32::from_str(border_size.as_str())?,
+            ));
+        }
+
+        Err(OnOffRuleParseError::UnknownFormat(s.into()))
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let opts: Opts = Opts::from_args();
+    let opts: Opts = Opts::parse();
     let img = image::open(opts.input)?;
 
+    let img = match &opts.size {
+        ImageSize::Default => img,
+        ImageSize::Sized { width, height } => {
+            if *width != img.width() || *height != img.height() {
+                img.resize(*width, *height, FilterType::Gaussian)
+            } else {
+                img
+            }
+        }
+    };
     let (width, height) = img.dimensions();
 
-    const RV: u32 = 1;
-    const RH: u32 = 1;
-
-    let img = img.resize(width / RH, height / RV, FilterType::Gaussian);
-    let (width, height) = img.dimensions();
-
-    let rl = OnOffRule::PxThreshold(75);
+    let rl = opts.rule;
 
     let mat: Vec<Vec<bool>> = (0..height)
         .map(|y| {
