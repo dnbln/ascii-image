@@ -99,8 +99,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let (width, height) = img.dimensions();
 
-    const RV: u32 = 8;
-    const RH: u32 = 4;
+    const RV: u32 = 1;
+    const RH: u32 = 1;
 
     let img = img.resize(width / RH, height / RV, FilterType::Gaussian);
     let (width, height) = img.dimensions();
