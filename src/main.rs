@@ -9,7 +9,6 @@ use std::error::Error;
 use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::Instant;
 use thiserror::Error;
 
 enum ImageSize {
