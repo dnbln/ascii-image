@@ -1,6 +1,6 @@
 use clap::Clap;
 use image::imageops::FilterType;
-use image::{DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView, Pixel};
 use itertools::Itertools;
 use rayon::prelude::*;
 use regex::Regex;
@@ -9,6 +9,7 @@ use std::error::Error;
 use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Instant;
 use thiserror::Error;
 
 enum ImageSize {
@@ -89,6 +90,7 @@ where
 #[derive(Copy, Clone)]
 enum OnOffRule {
     PxThreshold(i32),
+    InvertedPxThreshold(i32),
     Border(i32, i32),
 }
 
@@ -108,6 +110,16 @@ impl OnOffRule {
         match self {
             OnOffRule::PxThreshold(threshold) => {
                 *threshold <= img.get_pixel(x, y).0.iter().map(|&v| v as i32).sum::<i32>()
+            }
+            OnOffRule::InvertedPxThreshold(threshold) => {
+                *threshold
+                    >= img
+                        .get_pixel(x, y)
+                        .to_rgb()
+                        .0
+                        .iter()
+                        .map(|&v| v as i32)
+                        .sum::<i32>()
             }
             OnOffRule::Border(threshold, distance) => {
                 let px = img.get_pixel(x, y);
@@ -160,6 +172,14 @@ impl FromStr for OnOffRule {
             return Ok(OnOffRule::PxThreshold(i32::from_str(thr.as_str())?));
         }
 
+        let re = Regex::new(r"^InvertedThreshold\((\d+)\)$").unwrap();
+
+        if re.is_match(s) {
+            let thr = re.captures(s).unwrap().iter().nth(1).unwrap().unwrap();
+
+            return Ok(OnOffRule::InvertedPxThreshold(i32::from_str(thr.as_str())?));
+        }
+
         let re = Regex::new(r"^Border\((\d+),(\d+)\)$").unwrap();
 
         if re.is_match(s) {
@@ -186,7 +206,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ImageSize::Default => img,
         ImageSize::Sized { width, height } => {
             if *width != img.width() || *height != img.height() {
-                img.resize(*width, *height, FilterType::Gaussian)
+                img.resize(*width, *height, FilterType::Triangle)
             } else {
                 img
             }
